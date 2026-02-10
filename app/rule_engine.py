@@ -36,9 +36,9 @@ def calculate_confidence(service, price, status):
     return score
 
 def rule_process(email):
-    combined = f"{email.subject} {email.snippet}"
+    combined = f"{email['subject']} {email['snippet']}"
 
-    service = extract_service(email.from_field)
+    service = extract_service(email['from'])
     price = extract_price(combined)
     status = detect_status(combined)
 
