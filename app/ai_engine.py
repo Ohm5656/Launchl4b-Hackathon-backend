@@ -13,7 +13,7 @@ load_dotenv(".env")
 HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-FASTAPI_BASE = "http://localhost:8080"
+FASTAPI_BASE = "http://localhost:8000"
 FASTAPI_ENDPOINT = f"{FASTAPI_BASE}/api/ai/result"
 
 headers = {
@@ -109,3 +109,4 @@ if __name__ == "__main__":
     ]
 
     analyze_and_send(emails)
+
