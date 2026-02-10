@@ -1,53 +1,121 @@
 import re
+from datetime import datetime
+from typing import Optional
 
-def extract_service(from_field):
+
+# =========================
+# Helper extractors
+# =========================
+
+def extract_service_name(from_field: str) -> str:
+    """
+    info@netflix.com -> Netflix
+    receipt@spotify.com -> Spotify
+    """
     match = re.search(r'@([\w\-]+)\.', from_field.lower())
-    return match.group(1) if match else "unknown"
+    if not match:
+        return "Unknown"
 
-def extract_price(text):
-    match = re.search(r'[$€£]\s?\d+(\.\d{2})?', text)
-    return match.group() if match else None
+    service = match.group(1)
+    return service.capitalize()
 
-def detect_status(text):
+
+def extract_amount(text: str) -> Optional[float]:
+    """
+    $15.49 / €9.99 / £12.00
+    """
+    match = re.search(r'([$€£])\s?(\d+(\.\d{2})?)', text)
+    if not match:
+        return None
+
+    return float(match.group(2))
+
+
+def extract_currency(text: str) -> Optional[str]:
+    if "$" in text:
+        return "USD"
+    if "€" in text:
+        return "EUR"
+    if "£" in text:
+        return "GBP"
+    return None
+
+
+def detect_billing_cycle(text: str) -> str:
+    text = text.lower()
+    if "year" in text or "annual" in text:
+        return "yearly"
+    return "monthly"
+
+
+def detect_status(text: str) -> str:
     text = text.lower()
 
     if "payment failed" in text or "couldn't collect" in text:
         return "payment_failed"
 
-    if "renew" in text:
-        return "renewal_notice"
-
     if "trial" in text:
-        return "trial_ending"
+        return "trial"
 
-    if "receipt" in text or "invoice" in text:
-        return "receipt"
+    if "receipt" in text or "invoice" in text or "charged" in text:
+        return "active"
 
     return "unknown"
 
-def calculate_confidence(service, price, status):
-    score = 0
-    if service != "unknown":
-        score += 0.3
-    if price:
-        score += 0.3
-    if status != "unknown":
-        score += 0.4
-    return score
 
-def rule_process(email):
-    combined = f"{email['subject']} {email['snippet']}"
+def detect_category(service_name: str) -> str:
+    service = service_name.lower()
 
-    service = extract_service(email['from'])
-    price = extract_price(combined)
-    status = detect_status(combined)
+    if service in ["netflix", "spotify", "youtube"]:
+        return "Streaming"
+    if service in ["adobe", "figma", "notion"]:
+        return "Productivity"
+    if service in ["icloud", "google", "dropbox"]:
+        return "Cloud"
 
-    confidence = calculate_confidence(service, price, status)
+    return "Other"
+
+
+# =========================
+# MAIN RULE ENGINE
+# =========================
+
+def rule_process(email: dict) -> dict:
+    """
+    email = {
+      "id": "...",
+      "from": "...",
+      "subject": "...",
+      "snippet": "..."
+    }
+    """
+
+    combined_text = f"{email.get('subject', '')} {email.get('snippet', '')}"
+
+    service_name = extract_service_name(email.get("from", ""))
+    amount = extract_amount(combined_text)
+    currency = extract_currency(combined_text)
+    billing_cycle = detect_billing_cycle(combined_text)
+    status = detect_status(combined_text)
+    category = detect_category(service_name)
 
     return {
-        "service": service,
-        "price": price,
-        "renewal_date": None,
+        # ===== core fields =====
+        "service_name": service_name,
+        "category": category,
+
+        # วันที่: ถ้ายังหาไม่ได้ ให้ None (backend/AI pipeline จะจัดการต่อ)
+        "subscribed_date": None,
+        "next_billing_date": None,
+
+        "billing_cycle": billing_cycle,
+        "amount": amount,
+        "currency": currency,
         "status": status,
-        "confidence": confidence
+
+        # ===== source tracking =====
+        "source": {
+            "email_id": email.get("id"),
+            "from": email.get("from")
+        }
     }
