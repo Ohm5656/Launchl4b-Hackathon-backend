@@ -64,7 +64,7 @@ email = {
     "snippet": "You haven't paid your subscription..."
 }
 
-def returnJSON():
-    result = isSubscription(email)
-    print(json.dumps(re.rule_process(email)))
-returnJSON()
+def returnJSON(email):
+    if isSubscription(email) == "YES":
+        return json.dumps(re.rule_process(email))
+returnJSON(email)
