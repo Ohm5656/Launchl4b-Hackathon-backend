@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -90,37 +91,75 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	user := "me"
 	res, err := srv.Users.Messages.List(user).MaxResults(100).Do()
 	if err != nil {
-		http.Error(w, "Failed to list messages", http.StatusInternalServerError)
+		http.Error(w, "Failed to list messages: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var messages []MessageInfo
-	for _, m := range res.Messages {
-		msg, err := srv.Users.Messages.Get(user, m.Id).Format("metadata").MetadataHeaders("From", "Subject").Do()
-		if err != nil {
-			continue
-		}
+	log.Printf("Found %d messages in inbox", len(res.Messages))
 
-		info := MessageInfo{Snippet: msg.Snippet}
-		for _, h := range msg.Payload.Headers {
-			if h.Name == "From" {
-				info.From = h.Value
+	var messages []MessageInfo
+	msgChan := make(chan MessageInfo, len(res.Messages))
+	errChan := make(chan error, len(res.Messages))
+	var wg sync.WaitGroup
+
+	// Limit concurrency with a semaphore (e.g., 10 concurrent requests at a time)
+	sem := make(chan struct{}, 10)
+
+	for _, m := range res.Messages {
+		wg.Add(1)
+		sem <- struct{}{} // Acquire semaphore
+		go func(messageID string) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore
+
+			msg, err := srv.Users.Messages.Get(user, messageID).Format("metadata").MetadataHeaders("From", "Subject").Do()
+			if err != nil {
+				log.Printf("Error fetching message %s: %v", messageID, err)
+				errChan <- err
+				return
 			}
-			if h.Name == "Subject" {
-				info.Subject = h.Value
+
+			info := MessageInfo{Snippet: msg.Snippet}
+			for _, h := range msg.Payload.Headers {
+				if h.Name == "From" {
+					info.From = h.Value
+				}
+				if h.Name == "Subject" {
+					info.Subject = h.Value
+				}
 			}
-		}
-		messages = append(messages, info)
+			msgChan <- info
+		}(m.Id)
+	}
+
+	// Wait in a separate goroutine and close channels
+	go func() {
+		wg.Wait()
+		close(msgChan)
+		close(errChan)
+	}()
+
+	// Collect messages
+	for m := range msgChan {
+		messages = append(messages, m)
+	}
+
+	log.Printf("Successfully fetched %d messages", len(messages))
+	if len(errChan) > 0 {
+		log.Printf("Failed to fetch %d messages", len(errChan))
 	}
 
 	// For simplicity, we just display the results as JSON on the callback page.
-	// In a real app, we'd render another HTML template.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(messages)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_found": len(res.Messages),
+		"fetched":     len(messages),
+		"messages":      messages,
+		"errors_count": len(errChan),
+	})
 
-	// Proactively save to file as well, as requested
+	// Save to file
 	saveBytes, _ := json.MarshalIndent(messages, "", "  ")
 	os.WriteFile("inbox.json", saveBytes, 0644)
 	log.Println("Inbox saved to inbox.json")
 }
-
