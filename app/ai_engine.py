@@ -1,19 +1,29 @@
 import os
-from dotenv import load_dotenv
-import requests
-import rule_engine as re
 import json
+from datetime import datetime, timezone
+import requests
+from dotenv import load_dotenv
+import rule_engine as re
 
-load_dotenv(dotenv_path=".env")
+# =====================
+# ENV
+# =====================
+load_dotenv(".env")
 
-API_URL = "https://router.huggingface.co/v1/chat/completions"
+HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_TOKEN = os.getenv("HF_TOKEN")
+
+FASTAPI_BASE = "http://localhost:8080"
+FASTAPI_ENDPOINT = f"{FASTAPI_BASE}/api/ai/result"
 
 headers = {
     "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json"
 }
 
+# =====================
+# LLM CLASSIFIER
+# =====================
 def buildPrompt(email):
     return f"""
 You are classifying emails.
@@ -30,41 +40,72 @@ Subject: {email['subject']}
 Body: {email['snippet']}
 """
 
-
 def isSubscription(email):
-
-    prompt = buildPrompt(email)
-
     payload = {
         "model": "meta-llama/Llama-3.1-8B-Instruct:novita",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": buildPrompt(email)}],
         "max_tokens": 5,
         "temperature": 0
     }
 
-    r = requests.post(API_URL, headers=headers, json=payload)
+    r = requests.post(HF_API_URL, headers=headers, json=payload)
 
     if r.status_code != 200:
-        print("API Error:", r.text)
-        return "NO"
+        print("HF Error:", r.text)
+        return False
 
-    data = r.json()
+    try:
+        return r.json()["choices"][0]["message"]["content"].strip().upper() == "YES"
+    except:
+        return False
 
-    if "choices" not in data:
-        print("Bad response:", data)
-        return "NO"
+# =====================
+# MAIN PIPELINE
+# =====================
+def analyze_and_send(emails):
+    subscriptions = []
 
-    return data["choices"][0]["message"]["content"].strip()
+    for email in emails:
+        if not isSubscription(email):
+            continue
 
-email = {
-    "from": "Google <no-reply@accounts.google.com>",
-    "subject": "Subscription alert",
-    "snippet": "You haven't paid your subscription..."
-}
+        # rule_engine ต้องคืน object แบบ subscription
+        sub = re.rule_process(email)
+        if sub:
+            subscriptions.append(sub)
 
-def returnJSON(email):
-    if isSubscription(email) == "YES":
-        return json.dumps(re.rule_process(email))
-returnJSON(email)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "subscriptions": subscriptions
+    }
+
+    print("📦 Payload to FastAPI:")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    # 🔥 ส่งไป FastAPI
+    res = requests.post(
+        FASTAPI_ENDPOINT,
+        headers={"Content-Type": "application/json"},
+        json=payload
+    )
+
+    if res.status_code >= 300:
+        print("❌ Failed to send to FastAPI:", res.text)
+    else:
+        print("✅ Sent to FastAPI OK:", res.json())
+
+
+# =====================
+# TEST
+# =====================
+if __name__ == "__main__":
+    emails = [
+        {
+            "id": "18c7f2b9a3e8c123",
+            "from": "info@netflix.com",
+            "subject": "Your Netflix receipt",
+            "snippet": "You have been charged $15.49 for your monthly subscription"
+        }
+    ]
+
+    analyze_and_send(emails)
