@@ -88,7 +88,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := "me"
-	res, err := srv.Users.Messages.List(user).MaxResults(20).Do()
+	res, err := srv.Users.Messages.List(user).MaxResults(100).Do()
 	if err != nil {
 		http.Error(w, "Failed to list messages", http.StatusInternalServerError)
 		return
@@ -123,3 +123,4 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	os.WriteFile("inbox.json", saveBytes, 0644)
 	log.Println("Inbox saved to inbox.json")
 }
+
